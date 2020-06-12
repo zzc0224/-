@@ -1,0 +1,561 @@
+
+~~~
+#include <iostream>
+#include <conio.h>
+#include <stdlib.h>
+#include <windows.h>
+#include <time.h>
+
+
+//键盘控制相关键值
+#define KEY_UP      72 //上
+#define KEY_DOWN    80 //下
+#define KEY_LEFT    75 //左
+#define KEY_RIGHT   77 //右
+#define KEY_ESC     27 //返回
+#define KEY_A       97
+#define KEY_S       115
+#define KEY_D       100
+#define KEY_W       119
+//工作区数据存储
+#define MAPW    12     //地图的宽度
+#define MAPH    20     //地图的高度
+
+using namespace std;
+
+
+
+HANDLE initiate()
+{
+	HANDLE hOutput;
+	hOutput = GetStdHandle(STD_OUTPUT_HANDLE);
+	return hOutput;
+}
+BOOL textout(HANDLE hOutput, int x, int y, WORD wColors[], int nColors, LPTSTR lpszString)
+{
+	DWORD cWritten;
+	BOOL fSuccess;
+	COORD coord;
+
+	coord.X = x;              // 从第一个单元格开始
+	coord.Y = y;              //  第一排     
+	fSuccess = WriteConsoleOutputCharacter(
+		hOutput,              // 屏幕缓冲手柄
+		lpszString,           // 指向源字符串的指针
+		lstrlen(lpszString),  // 字符串长度
+		coord,                // 要写入的第一个单元格
+		&cWritten);           // 实际写入数
+	if (!fSuccess)
+		cout << "error:WriteConsoleOutputCharacter" << endl;
+
+
+	for (; fSuccess && coord.X < lstrlen(lpszString) + x; coord.X += nColors)
+	{
+		fSuccess = WriteConsoleOutputAttribute(
+			hOutput,          // 屏幕缓冲手柄
+			wColors,          // 指向源字符串的指针 
+			nColors,                // 字符串长度
+			coord,            // 要写入的第一个单元格
+			&cWritten);       // 实际写入数
+	}
+	if (!fSuccess)
+		cout << "error:WriteConsoleOutputAttribute" << endl;
+
+	return 0;
+}
+void Init(int map[MAPH][MAPW],int dx,int dy);//初始化工作			
+void Turn(int map[MAPH][MAPW],int a[][4], int w, int h, int *x, int y);    //方块旋转
+bool IsAvailable(int map[MAPH][MAPW],int a[], int x, int y, int w, int h); //判定是否能放下
+void DrawBlocks(int a[], int w, int h, int x, int y, WORD wColors[], int nColors,int dx,int dy);//方块显示
+void ClearSquare(int a[], int w, int h, int x, int y,int dx,int dy);//方块擦除
+void GameOver();//游戏结束
+void DeleteLine(int map[MAPH][MAPW], int row,int dx,int dy);  //消除一行
+
+HANDLE handle;
+//7种不同形状的方块
+int b[7][4][4] = { { { 1 },{ 1,1,1 } },
+{ { 0,2 },{ 2,2,2 } },
+{ { 3,3 },{ 0,3,3 } },
+{ { 0,0,4 },{ 4,4,4 } },
+{ { 0,5,5 },{ 5,5 } },
+{ { 6,6,6,6 } },
+{ { 7,7 },{ 7,7 } }
+};
+//7种对应颜色
+WORD SQUARE_COLOR[7] = { FOREGROUND_RED | FOREGROUND_INTENSITY,
+FOREGROUND_GREEN | FOREGROUND_INTENSITY,
+FOREGROUND_BLUE | FOREGROUND_INTENSITY,
+FOREGROUND_RED | FOREGROUND_GREEN | FOREGROUND_INTENSITY,
+FOREGROUND_RED | FOREGROUND_BLUE | FOREGROUND_INTENSITY,
+FOREGROUND_GREEN | FOREGROUND_BLUE | FOREGROUND_INTENSITY,
+FOREGROUND_RED | FOREGROUND_GREEN | FOREGROUND_BLUE | FOREGROUND_INTENSITY
+};
+
+int map[MAPH][MAPW] = { 0 }; //PLAYER1保存工作区的区域
+int map1[MAPH][MAPW] = { 0 }; //PLAYER2保存工作区的区域
+
+int dx = 8;  //PLAYER1 初始化x坐标
+int dy = 3;  //PLAYER1 初始化y坐标
+int dx1 = 44;//PLAYER2 初始化x坐标
+int dy1 = 3; //PLAYER2 初始化y坐标 
+int KEY1;
+int KEY2;
+
+DWORD WINAPI Player1(LPVOID lpParam);//PLAYER1程序
+DWORD WINAPI Player2(LPVOID lpParam);//PLAYER2程序
+
+int main()
+{
+	HANDLE hThread1 = CreateThread(NULL, 0, Player1, NULL, 0, NULL);
+	HANDLE hThread2 = CreateThread(NULL, 0, Player2, NULL, 0, NULL);
+
+	while (1)
+	{
+		if (_kbhit())  //检测是否有按键按下
+		{
+			int key = _getch();//获取按键的值
+			switch (key)
+			{
+			case KEY_UP://玩家2的操控按键
+				KEY2 = 1;
+				break;
+			case KEY_DOWN:
+				KEY2 = 2;
+				break;
+			case KEY_LEFT:
+				KEY2 = 3;
+				break;
+			case KEY_RIGHT:
+				KEY2 = 4;
+				break;
+			case KEY_W:   //玩家1的操控按键
+				KEY1 = 1;
+				break;
+			case KEY_S:
+				KEY1 = 2;
+				break;
+			case KEY_A:
+				KEY1 = 3;
+				break;
+			case KEY_D:
+				KEY1 = 4;
+				break;
+			case KEY_ESC:
+				exit(EXIT_SUCCESS);
+				break;
+			}
+		}
+	}
+	
+	CloseHandle(hThread1);
+	CloseHandle(hThread2);
+	
+	return 0;
+}
+
+int score = 0;  //初始化分数
+DWORD WINAPI Player1(LPVOID lpParam)
+{
+
+	Init(map,dx,dy);
+
+	int level = 0;  //初始化游戏级别
+
+	int Num = rand() % 7; //创建第一个方块编号
+	int nextNum = Num;    //保存下一个方块编号
+
+	int blank;  //记录每个方块起始位置
+	int x = 0, y = 0;  //记录游戏开始的相对坐标
+
+	int a[4][4] = { 0 }; //临时使用用来保存当前方块
+
+	while (1)
+	{
+		for (int i = 0; i<4; i++)          //复制方块
+			for (int j = 0; j<4; j++)
+				if (a[i][j] = b[nextNum][i][j])
+					blank = i;
+
+		y = 1 - blank;
+		x = 4;
+
+		//创建下一个方块
+		Num = nextNum;
+		ClearSquare(b[Num][0], 4, 4, 13, 13,dx,dy);
+		nextNum = rand() % 7;
+		WORD wColors[1] = { SQUARE_COLOR[nextNum] };
+		DrawBlocks(b[nextNum][0], 4, 4, 13, 13, wColors, 1,dx,dy);
+
+		wColors[0] = SQUARE_COLOR[Num];
+		DrawBlocks(&a[0][0], 4, 4, x, y, wColors, 1,dx,dy);
+
+		//显示分数信息
+		char string[5];
+		wColors[0] = FOREGROUND_RED | FOREGROUND_GREEN | FOREGROUND_INTENSITY;
+		textout(handle, 26 + dx, 5 + dy, wColors, 1, _itoa(score, string, 10));
+		textout(handle, 26 + dx, 9 + dy, wColors, 1, _itoa(level, string, 10));
+
+		int max_delay = 100 - 10 * level; //计算不同游戏级别的下落时间间隔
+
+		while (1)
+		{
+			int delay = 0; //延迟量
+			while (delay<max_delay)
+			{
+
+				switch (KEY1)
+				{
+				case 1:
+				{
+					KEY1 = 0;
+					ClearSquare(&a[0][0], 4, 4, x, y,dx,dy);
+					Turn(map,a, 4, 4, &x, y);
+					wColors[0] = SQUARE_COLOR[Num];
+					DrawBlocks(&a[0][0], 4, 4, x, y, wColors, 1,dx,dy);
+				}
+				break;
+				case 2:
+				{KEY1 = 0;
+				delay = max_delay; }
+				break;
+				case 3:
+				{
+					KEY1 = 0;
+					if (IsAvailable(map,&a[0][0], x - 1, y, 4, 4))
+					{
+						ClearSquare(&a[0][0], 4, 4, x, y,dx,dy);
+						x--;
+						wColors[0] = SQUARE_COLOR[Num];
+						DrawBlocks(&a[0][0], 4, 4, x, y, wColors, 1,dx,dy);
+					}
+				}
+				break;
+				case 4:
+				{
+					KEY1 = 0;
+					if (IsAvailable(map,&a[0][0], x + 1, y, 4, 4))
+					{
+						ClearSquare(&a[0][0], 4, 4, x, y,dx,dy);
+						x++;
+						wColors[0] = SQUARE_COLOR[Num];
+						DrawBlocks(&a[0][0], 4, 4, x, y, wColors, 1,dx,dy);
+					}
+				}
+				break;
+				}
+
+
+				Sleep(8); delay++;
+			}
+			if (IsAvailable(map,&a[0][0], x, y + 1, 4, 4)) //是否能下移
+			{
+				ClearSquare(&a[0][0], 4, 4, x, y,dx,dy);
+				y++;
+				wColors[0] = SQUARE_COLOR[Num];
+				DrawBlocks(&a[0][0], 4, 4, x, y, wColors, 1,dx,dy);
+			}
+			else
+			{
+				if (y <= 1) GameOver();     //是否结束
+				for (int i = 0; i<4; i++)     //放下方块，更新工作区
+					for (int j = 0; j<4; j++)
+						if (a[i][j] && ((i + y)<MAPH - 1) && ((j + x)<MAPW - 1))
+							map[i + y][j + x] = a[i][j];
+
+				int full, k = 0;
+				for (int i = y; i<min(y + 4, MAPH - 1); i++)
+				{
+					full = 1;
+					for (int j = 1; j<11; j++)
+						if (!map[i][j]) full = 0;
+					if (full)   //消掉一行
+					{
+						DeleteLine(map, i,dx,dy);
+						k++;
+						score = score + k;
+						level = min(score / 30, 9);
+						max_delay = 100 - 10 * level;
+					}
+				}
+				break;
+			}
+		}
+	}
+	return EXIT_SUCCESS;
+}
+
+int score1 = 0;  //初始化分数
+DWORD WINAPI Player2(LPVOID lpParam)
+{
+
+	Init(map1,dx1,dy1);
+
+
+	int level1 = 0;  //初始化游戏级别
+
+	int Num1 = rand() % 7; //创建第一个方块编号
+	int nextNum = Num1;    //保存下一个方块编号
+
+	int blank;  //记录每个方块起始位置
+	int x = 0, y = 0;  //记录游戏开始的相对坐标
+
+	int a[4][4] = { 0 }; //临时使用用来保存当前方块
+
+
+	while (1)
+	{
+		for (int i = 0; i<4; i++)          //复制方块
+			for (int j = 0; j<4; j++)
+				if (a[i][j] = b[nextNum][i][j])
+					blank = i;
+
+		y = 1 - blank;
+		x = 4;
+
+		//创建下一个方块
+		Num1 = nextNum;
+		ClearSquare(b[Num1][0], 4, 4, 13, 13,dx1,dy1);
+		nextNum = rand() % 7;
+		WORD wColors[1] = { SQUARE_COLOR[nextNum] };
+		DrawBlocks(b[nextNum][0], 4, 4, 13, 13, wColors, 1,dx1,dy1);
+
+		wColors[0] = SQUARE_COLOR[Num1];
+		DrawBlocks(&a[0][0], 4, 4, x, y, wColors, 1,dx1,dy1);
+
+		//显示分数信息
+		char string[5];
+		wColors[0] = FOREGROUND_RED | FOREGROUND_GREEN | FOREGROUND_INTENSITY;
+		textout(handle, 26 + dx1, 5 + dy1, wColors, 1, _itoa(score1, string, 10));
+		textout(handle, 26 + dx1, 9 + dy1, wColors, 1, _itoa(level1, string, 10));
+
+		int max_delay = 100 - 10 * level1; //计算不同游戏级别的下落时间间隔
+
+		while (1)
+		{
+			int delay = 0; //延迟量
+			while (delay<max_delay)
+			{
+				switch (KEY2)
+				{
+				case 1:
+				{
+					KEY2 = 0;
+					ClearSquare(&a[0][0], 4, 4, x, y,dx1,dy1);
+					Turn(map1,a, 4, 4, &x, y);
+					wColors[0] = SQUARE_COLOR[Num1];
+					DrawBlocks(&a[0][0], 4, 4, x, y, wColors, 1,dx1,dy1);
+				}
+				break;
+				case 2:
+				{KEY2 = 0;
+				delay = max_delay; }
+				break;
+				case 3:
+				{
+					KEY2 = 0;
+					if (IsAvailable(map1,&a[0][0], x - 1, y, 4, 4))
+					{
+						ClearSquare(&a[0][0], 4, 4, x, y,dx1,dy1);
+						x--;
+						wColors[0] = SQUARE_COLOR[Num1];
+						DrawBlocks(&a[0][0], 4, 4, x, y, wColors, 1,dx1,dy1);
+					}
+				}
+				break;
+				case 4:
+				{
+					KEY2 = 0;
+					if (IsAvailable(map1,&a[0][0], x + 1, y, 4, 4))
+					{
+						ClearSquare(&a[0][0], 4, 4, x, y,dx1,dy1);
+						x++;
+						wColors[0] = SQUARE_COLOR[Num1];
+						DrawBlocks(&a[0][0], 4, 4, x, y, wColors, 1,dx1,dy1);
+					}
+				}
+				break;
+				}
+				Sleep(8); delay++;
+			}
+			if (IsAvailable(map1,&a[0][0], x, y + 1, 4, 4)) //是否能下移
+			{
+				ClearSquare(&a[0][0], 4, 4, x, y,dx1,dy1);
+				y++;
+				wColors[0] = SQUARE_COLOR[Num1];
+				DrawBlocks(&a[0][0], 4, 4, x, y, wColors, 1,dx1,dy1);
+			}
+			else
+			{
+				if (y <= 1) GameOver();     //是否结束
+				for (int i = 0; i<4; i++)     //放下方块，更新工作区
+					for (int j = 0; j<4; j++)
+						if (a[i][j] && ((i + y)<MAPH - 1) && ((j + x)<MAPW - 1))
+							map1[i + y][j + x] = a[i][j];
+
+				int full, k = 0;
+				for (int i = y; i<min(y + 4, MAPH - 1); i++)
+				{
+					full = 1;
+					for (int j = 1; j<11; j++)
+						if (!map1[i][j]) full = 0;
+					if (full)   //消掉一行
+					{
+						DeleteLine(map1, i,dx1,dy1);
+						k++;
+						score1 = score1 + k;
+						level1 = min(score1 / 30, 9);
+						max_delay = 100 - 10 * level1;
+					}
+				}
+				break;
+			}
+		}
+	}
+	return EXIT_SUCCESS;
+}
+
+void Init(int map[MAPH][MAPW],int dx,int dy)//初始化工作	
+{
+
+	handle = initiate();
+
+	srand(time(NULL));
+
+	//初始化工作区
+	for (int i = 0; i<20; i++)
+	{
+		map[i][0] = -2;
+		map[i][11] = -2;
+	}
+	for (int i = 0; i<12; i++)
+	{
+		map[0][i] = -1;
+		map[19][i] = -1;
+	}
+	map[0][0] = -3;
+	map[0][11] = -3;
+	map[19][0] = -3;
+	map[19][11] = -3;
+
+	WORD wColors[1] = { FOREGROUND_RED | FOREGROUND_GREEN | FOREGROUND_INTENSITY };
+	textout(handle, 26 + dx, 3 + dy, wColors, 1, "SCORE");
+	textout(handle, 26 + dx, 7 + dy, wColors, 1, "LEVEL");
+	textout(handle, 26 + dx, 11 + dy, wColors, 1, "NEXT");
+
+	wColors[0] = FOREGROUND_RED | FOREGROUND_BLUE | FOREGROUND_INTENSITY;
+	DrawBlocks(&map[0][0], 12, 20, 0, 0, wColors, 1,dx,dy);
+	textout(handle, dx, dy, wColors, 1, "◇══════════◇");
+
+	wColors[0] = FOREGROUND_RED | FOREGROUND_GREEN | FOREGROUND_INTENSITY;
+	textout(handle, dx, dy - 1, wColors, 1, "按任意键开始");
+
+	int ch = _getch();
+	textout(handle, dx, dy - 2, wColors, 1, "              ");
+
+}
+
+bool IsAvailable(int map[MAPH][MAPW],int a[], int x, int y, int w, int h)//判断方块是否可移动
+{
+	for (int i = y; i<y + h; i++)
+		for (int j = x; j<x + w; j++)
+			if (map[i][j] && a[w*(i - y) + j - x])
+				return 0;
+	return 1;
+}
+
+void DrawBlocks(int a[], int w, int h, int x, int y, WORD wColors[], int nColors,int dx,int dy)//显示方块和边界
+{
+	int temp;
+
+	for (int i = 0; i<h; i++)
+		for (int j = 0; j<w; j++)
+			if ((temp = a[i*w + j]) && y + i>0)
+			{
+				if (temp == -3)
+					textout(handle, 2 * (x + j) + dx, y + i + dy, wColors, nColors, "◆");
+				else if (temp == -2)
+					textout(handle, 2 * (x + j) + dx, y + i + dy, wColors, nColors, "║");
+				else if (temp == -1)
+					textout(handle, 2 * (x + j) + dx, y + i + dy, wColors, nColors, "═");
+				else if (temp >= 1)
+					textout(handle, 2 * (x + j) + dx, y + i + dy, wColors, nColors, "■");
+			}
+}
+
+void Turn(int map[MAPH][MAPW],int a[][4], int w, int h, int *x, int y)//旋转方向
+{
+	int b[4][4] = { { 0,0,0,0 },{ 0,0,0,0 },{ 0,0,0,0 },{ 0,0,0,0 } };
+	int sign = 0, line = 0;
+	for (int i = h - 1; i >= 0; i--)
+	{
+		for (int j = 0; j<w; j++)
+			if (a[i][j])
+			{
+				b[j][line] = a[i][j];
+				sign = 1;
+			}
+		if (sign)
+		{
+			line++;
+			sign = 0;
+		}
+	}
+	for (int i = 0; i<4; i++)
+		if (IsAvailable(map,b[0], *x - i, y, w, h))
+		{
+			*x -= i;
+			for (int k = 0; k<h; k++)
+				for (int j = 0; j<w; j++)
+					a[k][j] = b[k][j];
+			break;
+		}
+}
+
+void ClearSquare(int *a, int w, int h, int x, int y,int dx,int dy)//擦除方块
+{
+	WORD wColors[1] = { 0 };
+	for (int i = 0; i<h; i++)
+		for (int j = 0; j<w; j++)
+		{
+			if (a[i*w + j]>0 && (i + y>0))
+			{
+				textout(handle, 2 * (x + j) + dx, y + i + dy, wColors, 1, "  ");
+			}
+		}
+
+}
+
+void GameOver()//游戏结束
+{
+	WORD wColors[1] = { FOREGROUND_RED | FOREGROUND_GREEN | FOREGROUND_INTENSITY };
+	textout(handle, 7 + dx, 10 + dy, wColors, 1, "GAME OVER");
+
+	exit(EXIT_SUCCESS);
+}
+
+void DeleteLine(int m[MAPH][MAPW], int row, int dx, int dy)//消行函数
+{
+	WORD wColors[1] = { FOREGROUND_RED | FOREGROUND_GREEN | FOREGROUND_INTENSITY };
+	textout(handle, 2 + dx, row + dy, wColors, 1, TEXT("﹌﹌﹌﹌﹌﹌﹌﹌﹌﹌"));
+	Sleep(100);
+	//首先判断是否填满
+	for (int i = row; i>1; i--)
+	{
+		ClearSquare(&m[i][1], MAPW - 2, 1, 1, i, dx, dy);
+		for (int j = 1; j<MAPW - 1; j++)
+		{
+			m[i][j] = m[i - 1][j];
+			//从底层向上赋值，将上一行赋给此行
+			if (m[i][j] == 0)
+				wColors[0] = 0;
+			else
+				wColors[0] = SQUARE_COLOR[m[i][j] - 1];
+			DrawBlocks(&m[i][j], 1, 1, j, i, wColors, 1, dx, dy);
+			//重画工作区
+		}
+	}
+	//将最顶一行全部赋为0
+	for (int i = 1; i<MAPW - 1; i++)
+		m[1][i] = 0;
+}
+~~~
